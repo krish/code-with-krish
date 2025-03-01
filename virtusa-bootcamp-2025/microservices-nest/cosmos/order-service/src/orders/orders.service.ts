@@ -9,18 +9,41 @@ import { Repository } from 'typeorm';
 import { OrderItem } from './entity/order-item.entity';
 import { createOrderDto } from './dto/create-order.dto';
 import { OrderStatus, UpdateOrderStatus } from './dto/update-order.dto';
-
+import { HttpService } from '@nestjs/axios';
+import { lastValueFrom } from 'rxjs';
 @Injectable()
 export class OrdersService {
+  private readonly inventoryServiceUrl = 'http://localhost:3001/products';
   constructor(
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(OrderItem)
     private readonly orderItemRepository: Repository<OrderItem>,
+    private readonly httpService: HttpService,
   ) {}
 
   async create(createOrderDto: createOrderDto): Promise<Order> {
     const { customerId, items } = createOrderDto;
+
+    //---------
+    for (const item of items) {
+      try {
+        const response$ = this.httpService.get(
+          `${this.inventoryServiceUrl}/${item.productId}/validate?quantity=${item.quantity}`,
+        );
+        const response = await lastValueFrom(response$);
+        if (!response.data.available) {
+          throw new BadRequestException(
+            `Product ID ${item.productId} is out of stock.`,
+          );
+        }
+      } catch (error) {
+        throw new BadRequestException(
+          `Error checking stock for Product ID ${item.productId}: ${error.message}`,
+        );
+      }
+    }
+    //---------
 
     const order = this.orderRepository.create({
       customerId,
