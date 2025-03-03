@@ -1,4 +1,12 @@
-import { Controller, Post, Get, Param, Query, Body } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Param,
+  Query,
+  Body,
+  Patch,
+} from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { Product } from './entity/product.entity';
@@ -30,5 +38,12 @@ export class ProductsController {
     @Query('quantity') quantity: number,
   ): Promise<{ available: boolean }> {
     return this.productsService.validateStock(id, quantity);
+  }
+  @Patch(':id/quantity')
+  async reduceStock(
+    @Param('id') id: number,
+    @Body('quantity') quantity: number,
+  ): Promise<Product> {
+    return this.productsService.reduceStock(id, quantity);
   }
 }

@@ -14,6 +14,8 @@ import { lastValueFrom } from 'rxjs';
 @Injectable()
 export class OrdersService {
   private readonly inventoryServiceUrl = 'http://localhost:3001/products';
+  private readonly customerServiceUrl = 'http://localhost:3002/customers';
+
   constructor(
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
@@ -22,8 +24,24 @@ export class OrdersService {
     private readonly httpService: HttpService,
   ) {}
 
-  async create(createOrderDto: createOrderDto): Promise<Order> {
+  async create(createOrderDto: createOrderDto): Promise<any> {
     const { customerId, items } = createOrderDto;
+    //--------customer
+    // Validate customer exists
+    let customerName = '';
+    try {
+      const response$ = this.httpService.get(
+        `${this.customerServiceUrl}/${customerId}`,
+      );
+      const response = await lastValueFrom(response$);
+      customerName = response.data.name;
+    } catch (error) {
+      throw new BadRequestException(
+        `Customer ID ${customerId} does not exist.`,
+      );
+    }
+
+    //-----------------
 
     //---------
     for (const item of items) {
@@ -59,11 +77,24 @@ export class OrdersService {
         order: savedOrder,
       }),
     );
-    await this.orderItemRepository.save(orderItems);
-    return await this.orderRepository.findOne({
-      where: { id: savedOrder.id },
-      relations: ['items'],
-    });
+    const savedOrderItems = await this.orderItemRepository.save(orderItems);
+
+    // Reduce stock in Inventory Service
+    for (const item of savedOrderItems) {
+      try {
+        await lastValueFrom(
+          this.httpService.patch(
+            `${this.inventoryServiceUrl}/${item.productId}/quantity`,
+            { quantity: item.quantity },
+          ),
+        );
+      } catch (error) {
+        throw new BadRequestException(
+          `Failed to reduce stock for Product ID ${item.productId}`,
+        );
+      }
+    }
+    return { ...savedOrder, customerName, items: orderItems };
   }
   async fetch(id: any) {
     return await this.orderRepository.findOne({

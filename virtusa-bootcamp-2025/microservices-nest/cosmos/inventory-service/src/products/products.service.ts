@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from './entity/product.entity';
@@ -34,5 +38,13 @@ export class ProductsService {
   ): Promise<{ available: boolean }> {
     const product = await this.getProductById(id);
     return { available: product.quantity >= quantity };
+  }
+  async reduceStock(id: number, quantity: number): Promise<Product> {
+    const product = await this.getProductById(id);
+    if (product.quantity < quantity) {
+      throw new BadRequestException(`Not enough stock for Product ID ${id}`);
+    }
+    product.quantity -= quantity;
+    return this.productRepository.save(product);
   }
 }
