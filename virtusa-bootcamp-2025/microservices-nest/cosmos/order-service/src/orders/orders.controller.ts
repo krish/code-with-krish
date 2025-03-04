@@ -1,8 +1,19 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  SetMetadata,
+  UseGuards,
+} from '@nestjs/common';
 import { createOrderDto } from './dto/create-order.dto';
 import { OrdersService } from './orders.service';
 import { Order } from './entity/order.entity';
 import { UpdateOrderStatus } from './dto/update-order.dto';
+import { AuthGuard } from '@nestjs/passport';
+import { PermissionsGuard } from 'src/auth/permissions.guard';
 
 @Controller('orders')
 export class OrdersController {
@@ -13,6 +24,8 @@ export class OrdersController {
     return await this.ordersService.create(createOrderDto);
   }
   @Get(':id')
+  @UseGuards(AuthGuard('jwt'), PermissionsGuard)
+  @SetMetadata('permissions', 'order:read')
   async fetch(@Param('id') id: number) {
     return await this.ordersService.fetch(id);
   }

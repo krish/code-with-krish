@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Order } from './entity/order.entity';
@@ -11,9 +12,16 @@ import { createOrderDto } from './dto/create-order.dto';
 import { OrderStatus, UpdateOrderStatus } from './dto/update-order.dto';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
+import { Kafka } from 'kafkajs';
+import { Redis } from 'ioredis';
 @Injectable()
-export class OrdersService {
-  private readonly inventoryServiceUrl = 'http://localhost:3001/products';
+export class OrdersService implements OnModuleInit {
+  private readonly redis = new Redis({ host: 'localhost', port: 6379 });
+  private readonly Kafka = new Kafka({ brokers: ['localhost:9092'] });
+  private readonly producer = this.Kafka.producer();
+  private readonly consumer = this.Kafka.consumer({ groupId: 'order-service' });
+
+  //private readonly inventoryServiceUrl = 'http://localhost:3001/products';
   private readonly customerServiceUrl = 'http://localhost:3002/customers';
 
   constructor(
@@ -23,6 +31,11 @@ export class OrdersService {
     private readonly orderItemRepository: Repository<OrderItem>,
     private readonly httpService: HttpService,
   ) {}
+  async onModuleInit() {
+    await this.producer.connect();
+    await this.consumer.connect();
+    await this.consumeConfirmedOrders();
+  }
 
   async create(createOrderDto: createOrderDto): Promise<any> {
     const { customerId, items } = createOrderDto;
@@ -40,7 +53,33 @@ export class OrdersService {
         `Customer ID ${customerId} does not exist.`,
       );
     }
+    //aquare lock
+    for (const item of items) {
+      const lockKey = `product:${item.productId}:lock`;
+      const lock = await this.redis.set(
+        lockKey,
+        'locked',
+        'EX',
+        3600 * 24,
+        'NX',
+      );
+      if (!lock) {
+        throw new BadRequestException(
+          `product id ${item.productId} is being processed. please try again later`,
+        );
+      }
+    }
 
+    // produce order as an event
+
+    this.producer.send({
+      topic: `order.create`,
+      messages: [
+        { value: JSON.stringify({ customerId, customerName, items }) },
+      ],
+    });
+    return { message: `order is placed. waiting inventory service to process` };
+    /*
     //-----------------
 
     //---------
@@ -95,6 +134,7 @@ export class OrdersService {
       }
     }
     return { ...savedOrder, customerName, items: orderItems };
+    */
   }
   async fetch(id: any) {
     return await this.orderRepository.findOne({
@@ -121,5 +161,36 @@ export class OrdersService {
     }
     order.status = updateStatus.status;
     return await this.orderRepository.save(order);
+  }
+
+  async consumeConfirmedOrders() {
+    await this.consumer.subscribe({
+      topic: 'order.inventory.update',
+      fromBeginning: true,
+    });
+    await this.consumer.run({
+      eachMessage: async ({ message }) => {
+        console.log(`---------------- new order confirmation arrived---------`);
+        const { customerId, items } = JSON.parse(message.value.toString());
+        //save to db
+
+        const order = this.orderRepository.create({
+          customerId,
+          status: OrderStatus.CONFIRMED,
+        });
+        const savedOrder = await this.orderRepository.save(order);
+
+        const orderItems = items.map((item) =>
+          this.orderItemRepository.create({
+            productId: item.productId,
+            price: item.price,
+            quantity: item.quantity,
+            order: savedOrder,
+          }),
+        );
+
+        await this.orderItemRepository.save(orderItems);
+      },
+    });
   }
 }
